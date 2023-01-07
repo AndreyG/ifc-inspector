@@ -1,0 +1,1 @@
+﻿cl /std:c++20 /I ../lib/ifc/lib/core/include /exportHeader ifc-reader-interface.h

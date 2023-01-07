@@ -1,0 +1,3 @@
+[submodule "lib/ifc"]
+	path = lib/ifc
+	url = git@github.com:AndreyG/ifc-reader.git

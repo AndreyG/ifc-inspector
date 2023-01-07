@@ -1,0 +1,9 @@
+﻿#include <ifc/Attribute.h>
+#include <ifc/Chart.h>
+#include <ifc/Declaration.h>
+#include <ifc/Expression.h>
+#include <ifc/Literal.h>
+#include <ifc/Name.h>
+#include <ifc/SyntaxTree.h>
+#include <ifc/Type.h>
+#include <ifc/Word.h>
