@@ -1,7 +1,20 @@
 ﻿#include "commander.h"
 
-#include <ifc/Declaration.h>
-#include <ifc/Expression.h>
+#include "reflifc/ArrayType.h"
+#include "reflifc/DyadExpression.h"
+#include "reflifc/Enumeration.h"
+#include "reflifc/Enumerator.h"
+#include "reflifc/Expression.h"
+#include "reflifc/FilteredViews.h"
+#include "reflifc/Literal.h"
+#include "reflifc/ScopeDeclaration.h"
+#include "reflifc/StringLiteral.h"
+#include "reflifc/Type.h"
+#include "reflifc/Module.h"
+#include "reflifc/SyntaticType.h"
+#include "reflifc/TemplateDeclaration.h"
+#include "reflifc/Variable.h"
+
 #include <ifc/Type.h>
 
 #include <charconv>
@@ -18,15 +31,81 @@ T const* get_value(std::unordered_map<std::string_view, T> const & map, std::str
     return &it->second;
 }
 
-Commander::Commander(ifc::File::BlobView schema_raw_data, ifc::File const& file)
-    : schema_(schema_raw_data)
-    , file_(file)
+static std::pair<std::string_view, PartitionDescription> create_partition_description(reflifc::Struct partition)
+{
+    std::string_view name;
+    PartitionDescription descr;
+
+    for (auto base : partition.bases())
+    {
+        for (auto member : base.members())
+        {
+            if (member.is_field())
+                descr.fields.push_back(member.as_field());
+        }
+    }
+    for (auto member : partition.members())
+    {
+        if (member.is_field())
+        {
+            descr.fields.push_back(member.as_field());
+        }
+        else if (member.is_variable())
+        {
+            auto var = member.as_variable();
+            if (has_name(var, "PartitionName"))
+            {
+                auto value = var.ct_value().as_dyad();
+                assert(value.op() == ifc::DyadicOperator::Plus);
+                assert(value.right().as_literal().is_null());
+                name = value.left().as_string_literal().value();
+            }
+        }
+    }
+    return { name, std::move(descr) };
+}
+
+void Commander::fill_partitions(reflifc::Namespace ifc_namespace)
+{
+    for (auto strct : get_structs(ifc_namespace))
+    {
+        if (!strct.is_complete())
+            continue;
+
+        for (auto member : strct.members())
+        {
+            if (member.is_variable())
+            {
+                auto var = member.as_variable();
+                if (has_name(var, "PartitionName"))
+                {
+                    partition_description_.insert(create_partition_description(strct));
+                    break;
+                }
+            }
+        }
+    }
+}
+
+static reflifc::Namespace find_ifc_namespace(reflifc::Module module)
+{
+    auto namespaces = get_namespaces(module);
+    const auto it = std::ranges::find_if(namespaces, [] (reflifc::Namespace ns) {
+        return has_name(ns, "ifc");
+    });
+    assert(it != namespaces.end());
+    return *it;
+}
+
+Commander::Commander(reflifc::Module schema, ifc::File const& file)
+    : file_(file)
 {
     for (ifc::PartitionSummary const& partition : file_.table_of_contents())
     {
         std::string_view name = file_.get_string(partition.name);
         partition_summary_.emplace(name, &partition);
     }
+    fill_partitions(find_ifc_namespace(schema));
 }
 
 void Commander::present_partitions()
@@ -54,7 +133,7 @@ void Commander::present_partition(std::string_view partition)
     }
     present_summary(**summary);
 
-    auto descr = get_value(schema_.partition_description, partition);
+    auto descr = get_value(partition_description_, partition);
     if (!descr)
     {
         std::cout << "unknown partition '" << partition << "'\n";
@@ -80,53 +159,34 @@ size_t Commander::calculate_size_of(PartitionDescription const& descr) const
 {
     size_t size = 0;
     for (auto const& field : descr.fields)
-        size += size_of(field.type);
+        size += size_of(field.type());
     return align4(size);
 }
 
-size_t Commander::size_of(ifc::TypeIndex type) const
+size_t Commander::size_of(reflifc::Type type) const
 {
-    using enum ifc::TypeSort;
+    if (type.is_fundamental())
+        return size_of(type.as_fundamental());
 
-    switch (const auto kind = type.sort())
+    if (type.is_designated())
     {
-    case Fundamental:
-        return size_of(schema_.fundamental_types()[type]);
-    case Designated:
+        auto decl = type.designation();
+
+        if (decl.is_enumeration())
+            return size_of(decl.as_enumeration().underlying_type());
+
+        return size_of(decl.as_scope().as_struct());
+    }
+
+    if (type.is_array())
     {
-        auto decl = schema_.designated_types()[type].decl;
-        switch (const auto kind = decl.sort())
-        {
-        case ifc::DeclSort::Scope:
-        {
-            auto const& scope = schema_.scope_declarations()[decl];
-            return size_of(scope);
-        }
-        case ifc::DeclSort::Enumeration:
-        {
-            auto const& enumeration = schema_.enumerations()[decl];
-            return size_of(enumeration.base);
-        }
-        default:
-            throw std::runtime_error("<unknown declaration>");
-        }
+        auto array = type.as_array();
+        return size_of(array.element()) * array.extent().as_literal().int_value();
     }
-    case Syntactic:
-    {
-        ifc::TemplateId const& template_id = schema_.template_ids()[schema_.syntactic_types()[type].expr];
-        auto primary_entity = schema_.decl_expressions()[template_id.primary].resolution;
-        auto primary_entity_name = schema_.get_identifier(schema_.template_declarations()[primary_entity].name);
-        assert(primary_entity_name == "AbstractReference"sv);
-        return sizeof(std::uint32_t);
-    }
-    case Array:
-    {
-        auto array = schema_.array_types()[type];
-        return sizeof array.element * get_int_literal_value(array.extent);
-    }
-    default:
-        throw std::runtime_error("unexpected type");
-    }
+
+    auto syntatic_type = type.as_syntatic();
+    assert(has_name(syntatic_type.primary(), "AbstractReference"));
+    return sizeof(std::uint32_t);
 }
 
 size_t Commander::size_of(ifc::FundamentalType type) const
@@ -156,14 +216,14 @@ size_t Commander::size_of(ifc::FundamentalType type) const
     }
 }
 
-size_t Commander::size_of(ifc::ScopeDeclaration const& scope) const
+size_t Commander::size_of(reflifc::Struct strct) const
 {
     size_t size = 0;
 
-    for (auto member : get_declarations(schema_, schema_.scope_descriptors()[scope.initializer]))
+    for (auto member : strct.members())
     {
-        if (member.index.sort() == ifc::DeclSort::Field)
-            size += size_of(schema_.fields()[member.index].type);
+        if (member.is_field())
+            size += size_of(member.as_field().type());
     }
 
     return align4(size);
@@ -174,60 +234,43 @@ void Commander::present_partition_description(PartitionDescription const& partit
     std::cout << "[Fields]\n";
     for (auto const & field : partition.fields)
     {
-        std::cout << field.name << ": ";
-        present_type(field.type);
+        std::cout << field.name() << ": ";
+        present_type(field.type());
         std::cout << '\n';
     }
 }
 
-void Commander::present_type(ifc::TypeIndex type)
+void Commander::present_type(reflifc::Type type)
 {
-    using enum ifc::TypeSort;
-
-    switch (const auto kind = type.sort())
+    if (type.is_fundamental())
     {
-    case Fundamental:
-        return present_fundamental_type(schema_.fundamental_types()[type]);
-    case Designated:
-    {
-        auto decl = schema_.designated_types()[type].decl;
-        switch (const auto kind = decl.sort())
-        {
-        case ifc::DeclSort::Scope:
-            std::cout << schema_.get_identifier(schema_.scope_declarations()[decl].name);
-            break;
-        case ifc::DeclSort::Enumeration:
-            std::cout << schema_.get_string(schema_.enumerations()[decl].name);
-            break;
-        default:
-            std::cout << "<unknown declaration>";
-        }
-        break;
+        present_fundamental_type(type.as_fundamental());
     }
-    case Syntactic:
+    else if (type.is_designated())
     {
-        ifc::TemplateId const& template_id = schema_.template_ids()[schema_.syntactic_types()[type].expr];
-        auto primary_entity = schema_.decl_expressions()[template_id.primary].resolution;
-        auto primary_entity_name = schema_.get_identifier(schema_.template_declarations()[primary_entity].name);
-        assert(primary_entity_name == "AbstractReference"sv);
-        auto arguments = get_tuple_expression_elements(schema_, schema_.tuple_expressions()[template_id.arguments]);
+        auto decl = type.designation();
+
+        if (decl.is_enumeration())
+            std::cout << decl.as_enumeration().name();
+        else
+            std::cout << decl.as_scope().name().as_identifier();
+    }
+    else if (type.is_array())
+    {
+        auto array = type.as_array();
+        present_type(array.element());
+        std::cout << "[" << array.extent().as_literal().int_value() << "]";
+    }
+    else
+    {
+        auto syntatic_type = type.as_syntatic();
+        assert(has_name(syntatic_type.primary(), "AbstractReference"));
+        auto arguments = syntatic_type.arguments();
         assert(arguments.size() == 2);
-        auto second_arg = schema_.type_expressions()[arguments[ifc::Index{1}]].denotation;
-        std::string_view second_arg_name = schema_.get_string(schema_.enumerations()[schema_.designated_types()[second_arg].decl].name);
+        std::string_view second_arg_name = arguments[1].as_type().designation().as_enumeration().name();
         assert(second_arg_name.ends_with("Sort"));
         second_arg_name.remove_suffix(4);
         std::cout << second_arg_name << "Index";
-        break;
-    }
-    case Array:
-    {
-        auto array = schema_.array_types()[type];
-        present_type(array.element);
-        std::cout << "[" << get_int_literal_value(array.extent) << "]";
-        break;
-    }
-    default:
-        std::cout << "<unknown type>";
     }
 }
 
@@ -241,13 +284,6 @@ void Commander::present_fundamental_type(ifc::FundamentalType type)
     default:
         std::cout << "<unknown fundamental type>";
     }
-}
-
-std::uint32_t Commander::get_int_literal_value(ifc::ExprIndex expr) const
-{
-    const auto literal = schema_.literal_expressions()[expr].value;
-    assert(literal.sort() == ifc::LiteralSort::Immediate);
-    return literal.index;
 }
 
 void Commander::partition(ArgumentList arguments)
@@ -311,7 +347,7 @@ void Commander::present_element(std::string_view partition, uint32_t index, ifc:
         return;
     }
 
-    auto descr = get_value(schema_.partition_description, partition);
+    auto descr = get_value(partition_description_, partition);
     if (!descr)
     {
         std::cout << "unknown partition '" << partition << "'\n";
@@ -335,8 +371,8 @@ void Commander::present_element(std::byte const* data_ptr, PartitionDescription 
 {
     for (auto const& field : descr.fields)
     {
-        std::cout << field.name << ": ";
-        present_value(data_ptr, field.type);
+        std::cout << field.name() << ": ";
+        present_value(data_ptr, field.type());
         std::cout << "\n";
     }
 }
@@ -373,77 +409,63 @@ namespace
     }
 }
 
-void Commander::present_value(std::byte const*& data_ptr, ifc::TypeIndex type)
+void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
 {
-    using enum ifc::TypeSort;
-
-    switch (const auto kind = type.sort())
+    if (type.is_fundamental())
     {
-    case Fundamental:
-        return present_fundamental_value(data_ptr, schema_.fundamental_types()[type]);
-    case Designated:
-    {
-        auto decl = schema_.designated_types()[type].decl;
-        switch (const auto kind = decl.sort())
-        {
-        case ifc::DeclSort::Scope:
-            return present_object_value(data_ptr, schema_.scope_declarations()[decl]);
-        case ifc::DeclSort::Enumeration:
-            return present_enumerator(data_ptr, schema_.enumerations()[decl]);
-        default:
-            throw std::runtime_error("<unknown declaration>");
-        }
+        present_fundamental_value(data_ptr, type.as_fundamental());
     }
-    case Syntactic:
+    else if (type.is_designated())
     {
-        ifc::TemplateId const& template_id = schema_.template_ids()[schema_.syntactic_types()[type].expr];
-        auto primary_entity = schema_.decl_expressions()[template_id.primary].resolution;
-        auto primary_entity_name = schema_.get_identifier(schema_.template_declarations()[primary_entity].name);
-        assert(primary_entity_name == "AbstractReference"sv);
-        auto arguments = get_tuple_expression_elements(schema_, schema_.tuple_expressions()[template_id.arguments]);
-        assert(arguments.size() == 2);
-        present_abstract_reference(*reinterpret_cast<std::uint32_t const*>(data_ptr), arguments[ifc::Index{0}], arguments[ifc::Index{1}]);
-        data_ptr += sizeof(std::uint32_t);
-        break;
+        auto decl = type.designation();
+        if (decl.is_enumeration())
+            present_enumerator(data_ptr, decl.as_enumeration());
+        else
+            present_object_value(data_ptr, decl.as_scope().as_struct());
     }
-    case Array:
+    else if (type.is_array())
     {
-        const auto array = schema_.array_types()[type];
+        const auto array = type.as_array();
         std::cout << "[";
         bool first = true;
-        for (std::uint32_t array_size = get_int_literal_value(array.extent), i = 0; i != array_size; ++i)
+        for (std::uint32_t array_size = array.extent().as_literal().int_value(), i = 0; i != array_size; ++i)
         {
             if (first)
                 first = false;
             else
                 std::cout << ", ";
-            present_value(data_ptr, array.element);
+            present_value(data_ptr, array.element());
         }
         std::cout << "]";
-        break;
     }
-    default:
-        throw std::runtime_error("unexpected type");
+    else
+    {
+        auto syntatic_type = type.as_syntatic();
+        assert(has_name(syntatic_type.primary(), "AbstractReference"));
+        auto arguments = syntatic_type.arguments();
+        assert(arguments.size() == 2);
+        present_abstract_reference(*reinterpret_cast<std::uint32_t const*>(data_ptr), arguments[0], arguments[1]);
+        data_ptr += sizeof(std::uint32_t);
     }
 }
 
-void Commander::present_object_value(const std::byte*& data_ptr, ifc::ScopeDeclaration const& scope)
+void Commander::present_object_value(const std::byte*& data_ptr, reflifc::Struct strct)
 {
     std::cout << "{ ";
 
     bool first = true;
-    for (auto member : get_declarations(schema_, schema_.scope_descriptors()[scope.initializer]))
+    for (auto member : strct.members())
     {
-        if (member.index.sort() == ifc::DeclSort::Field)
+        if (member.is_field())
         {
             if (first)
                 first = false;
             else
                 std::cout << ", ";
 
-            auto const& field = schema_.fields()[member.index];
-            std::cout << schema_.get_string(field.name) << ": ";
-            present_value(data_ptr, field.type);
+            auto field = member.as_field();
+            std::cout << field.name() << ": ";
+            present_value(data_ptr, field.type());
         }
     }
 
@@ -452,26 +474,27 @@ void Commander::present_object_value(const std::byte*& data_ptr, ifc::ScopeDecla
     std::cout << "}";
 }
 
-void Commander::present_enumerator(std::byte const*& data_ptr, ifc::Enumeration const& enumeration)
+void Commander::present_enumerator(std::byte const*& data_ptr, reflifc::Enumeration enumeration)
 {
-    if (raw_count(enumeration.initializer.cardinality) == 0)
+    auto enumerators = enumeration.enumerators();
+    if (enumerators.empty())
     {
-        if (schema_.get_string(enumeration.name) == "TextOffset"sv)
+        if (enumeration.name() == "TextOffset"sv)
         {
             std::cout << file_.get_string(*reinterpret_cast<ifc::TextOffset const*>(data_ptr));
             data_ptr += sizeof(ifc::TextOffset);
             return;
         }
-        return present_value(data_ptr, enumeration.base);
+        return present_value(data_ptr, enumeration.underlying_type());
     }
 
-    const auto size = size_of(enumeration.base);
-    for (ifc::Enumerator const & enumerator : schema_.enumerators().slice(enumeration.initializer))
+    const auto size = size_of(enumeration.underlying_type());
+    for (auto enumerator : enumerators)
     {
-        const auto value = get_int_literal_value(enumerator.initializer);
+        const auto value = enumerator.value().as_literal().int_value();
         if (std::memcmp(data_ptr, &value, size) == 0)
         {
-            std::cout << schema_.get_string(enumerator.name);
+            std::cout << enumerator.name();
             goto exit;
         }
     }
@@ -481,7 +504,7 @@ exit:
     data_ptr += size;
 }
 
-void Commander::present_abstract_reference(uint32_t storage, ifc::ExprIndex first_templarg, ifc::ExprIndex second_templarg)
+void Commander::present_abstract_reference(uint32_t storage, reflifc::Expression first_templarg, reflifc::Expression second_templarg)
 {
     if (storage == 0)
     {
@@ -489,8 +512,8 @@ void Commander::present_abstract_reference(uint32_t storage, ifc::ExprIndex firs
         return;
     }
 
-    auto const& enumeration = schema_.enumerations()[schema_.designated_types()[schema_.type_expressions()[second_templarg].denotation].decl];
-    if (schema_.get_string(enumeration.name) == "NameSort"sv)
+    auto enumeration = second_templarg.as_type().designation().as_enumeration();
+    if (enumeration.name() == "NameSort"sv)
     {
         auto name = reinterpret_cast<ifc::NameIndex&>(storage);
         if (name.sort() == ifc::NameSort::Identifier)
@@ -500,17 +523,17 @@ void Commander::present_abstract_reference(uint32_t storage, ifc::ExprIndex firs
         }
     }
 
-    const auto bits_count = get_int_literal_value(first_templarg);
+    const auto bits_count = first_templarg.as_literal().int_value();
     const auto mask = (1u << bits_count) - 1;
     const auto sort = storage & mask;
 
     std::cout << "(";
-    for (ifc::Enumerator const & enumerator : schema_.enumerators().slice(enumeration.initializer))
+    for (auto enumerator : enumeration.enumerators())
     {
-        const auto value = get_int_literal_value(enumerator.initializer);
+        const auto value = enumerator.value().as_literal().int_value();
         if (value == sort)
         {
-            std::cout << schema_.get_string(enumerator.name);
+            std::cout << enumerator.name();
             break;
         }
     }

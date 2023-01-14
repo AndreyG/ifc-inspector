@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 project(ifc-inspector)
 
 add_subdirectory(lib/ifc)
+add_subdirectory(lib/reflifc)
 
 add_executable(embedfile src/embedfile.cpp)
 
@@ -17,10 +18,8 @@ set(sources
     src/main.cpp
     src/commander.h
     src/commander.cpp
-    src/schema.h
-    src/schema.cpp
     )
 
 add_executable(ifc-inspector ${sources} ${schema_output_file})
 
-target_link_libraries(ifc-inspector ifc-core ifc-blob-reader)
+target_link_libraries(ifc-inspector reflifc ifc-core ifc-blob-reader)

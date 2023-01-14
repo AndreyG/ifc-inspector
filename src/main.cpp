@@ -24,7 +24,8 @@ int main(int argc, char* argv[])
     const auto input_data = ifc::read_blob(path_to_ifc);
     ifc::File file(input_data->view());
 
-    Commander commander(schema_raw_data(), file);
+    ifc::File schema(schema_raw_data());
+    Commander commander(reflifc::Module(schema), file);
     for (;;)
     {
         std::string command;
