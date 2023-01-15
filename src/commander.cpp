@@ -1,19 +1,18 @@
 ﻿#include "commander.h"
 
-#include "reflifc/ArrayType.h"
-#include "reflifc/DyadExpression.h"
-#include "reflifc/Enumeration.h"
-#include "reflifc/Enumerator.h"
 #include "reflifc/Expression.h"
-#include "reflifc/FilteredViews.h"
-#include "reflifc/Literal.h"
-#include "reflifc/ScopeDeclaration.h"
-#include "reflifc/StringLiteral.h"
 #include "reflifc/Type.h"
-#include "reflifc/Module.h"
-#include "reflifc/SyntaticType.h"
-#include "reflifc/TemplateDeclaration.h"
-#include "reflifc/Variable.h"
+#include "reflifc/Literal.h"
+#include "reflifc/StringLiteral.h"
+#include "reflifc/Query.h"
+#include "reflifc/decl/Enumeration.h"
+#include "reflifc/decl/Enumerator.h"
+#include "reflifc/decl/TemplateDeclaration.h"
+#include "reflifc/decl/Variable.h"
+#include "reflifc/decl/ScopeDeclaration.h"
+#include "reflifc/expr/Dyad.h"
+#include "reflifc/type/Array.h"
+#include "reflifc/type/Syntatic.h"
 
 #include <ifc/Type.h>
 
@@ -37,13 +36,8 @@ static std::pair<std::string_view, PartitionDescription> create_partition_descri
     PartitionDescription descr;
 
     for (auto base : partition.bases())
-    {
-        for (auto member : base.members())
-        {
-            if (member.is_field())
-                descr.fields.push_back(member.as_field());
-        }
-    }
+        std::ranges::copy(fields(base), std::back_inserter(descr.fields));
+
     for (auto member : partition.members())
     {
         if (member.is_field())
@@ -55,7 +49,7 @@ static std::pair<std::string_view, PartitionDescription> create_partition_descri
             auto var = member.as_variable();
             if (has_name(var, "PartitionName"))
             {
-                auto value = var.ct_value().as_dyad();
+                auto value = var.initializer().as_dyad();
                 assert(value.op() == ifc::DyadicOperator::Plus);
                 assert(value.right().as_literal().is_null());
                 name = value.left().as_string_literal().value();
@@ -67,34 +61,20 @@ static std::pair<std::string_view, PartitionDescription> create_partition_descri
 
 void Commander::fill_partitions(reflifc::Namespace ifc_namespace)
 {
-    for (auto strct : get_structs(ifc_namespace))
+    for (auto strct : get_structs(ifc_namespace.scope()))
     {
         if (!strct.is_complete())
             continue;
 
-        for (auto member : strct.members())
+        for (auto var : static_variables(strct))
         {
-            if (member.is_variable())
+            if (has_name(var, "PartitionName"))
             {
-                auto var = member.as_variable();
-                if (has_name(var, "PartitionName"))
-                {
-                    partition_description_.insert(create_partition_description(strct));
-                    break;
-                }
+                partition_description_.insert(create_partition_description(strct));
+                break;
             }
         }
     }
-}
-
-static reflifc::Namespace find_ifc_namespace(reflifc::Module module)
-{
-    auto namespaces = get_namespaces(module);
-    const auto it = std::ranges::find_if(namespaces, [] (reflifc::Namespace ns) {
-        return has_name(ns, "ifc");
-    });
-    assert(it != namespaces.end());
-    return *it;
 }
 
 Commander::Commander(reflifc::Module schema, ifc::File const& file)
@@ -105,7 +85,7 @@ Commander::Commander(reflifc::Module schema, ifc::File const& file)
         std::string_view name = file_.get_string(partition.name);
         partition_summary_.emplace(name, &partition);
     }
-    fill_partitions(find_ifc_namespace(schema));
+    fill_partitions(find_namespace_by_name(schema.global_namespace(), "ifc").value());
 }
 
 void Commander::present_partitions()
@@ -181,7 +161,7 @@ size_t Commander::size_of(reflifc::Type type) const
     if (type.is_array())
     {
         auto array = type.as_array();
-        return size_of(array.element()) * array.extent().as_literal().int_value();
+        return size_of(array.element()) * extent_value(array);
     }
 
     auto syntatic_type = type.as_syntatic();
@@ -220,11 +200,8 @@ size_t Commander::size_of(reflifc::Struct strct) const
 {
     size_t size = 0;
 
-    for (auto member : strct.members())
-    {
-        if (member.is_field())
-            size += size_of(member.as_field().type());
-    }
+    for (auto field : fields(strct))
+        size += size_of(field.type());
 
     return align4(size);
 }
@@ -259,7 +236,7 @@ void Commander::present_type(reflifc::Type type)
     {
         auto array = type.as_array();
         present_type(array.element());
-        std::cout << "[" << array.extent().as_literal().int_value() << "]";
+        std::cout << "[" << extent_value(array) << "]";
     }
     else
     {
@@ -428,7 +405,7 @@ void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
         const auto array = type.as_array();
         std::cout << "[";
         bool first = true;
-        for (std::uint32_t array_size = array.extent().as_literal().int_value(), i = 0; i != array_size; ++i)
+        for (std::uint32_t array_size = extent_value(array), i = 0; i != array_size; ++i)
         {
             if (first)
                 first = false;
@@ -454,19 +431,15 @@ void Commander::present_object_value(const std::byte*& data_ptr, reflifc::Struct
     std::cout << "{ ";
 
     bool first = true;
-    for (auto member : strct.members())
+    for (auto field : fields(strct))
     {
-        if (member.is_field())
-        {
-            if (first)
-                first = false;
-            else
-                std::cout << ", ";
+        if (first)
+            first = false;
+        else
+            std::cout << ", ";
 
-            auto field = member.as_field();
-            std::cout << field.name() << ": ";
-            present_value(data_ptr, field.type());
-        }
+        std::cout << field.name() << ": ";
+        present_value(data_ptr, field.type());
     }
 
     if (!first)
@@ -476,8 +449,7 @@ void Commander::present_object_value(const std::byte*& data_ptr, reflifc::Struct
 
 void Commander::present_enumerator(std::byte const*& data_ptr, reflifc::Enumeration enumeration)
 {
-    auto enumerators = enumeration.enumerators();
-    if (enumerators.empty())
+    if (enumeration.enumerators().empty())
     {
         if (enumeration.name() == "TextOffset"sv)
         {
@@ -489,18 +461,11 @@ void Commander::present_enumerator(std::byte const*& data_ptr, reflifc::Enumerat
     }
 
     const auto size = size_of(enumeration.underlying_type());
-    for (auto enumerator : enumerators)
-    {
-        const auto value = enumerator.value().as_literal().int_value();
-        if (std::memcmp(data_ptr, &value, size) == 0)
-        {
-            std::cout << enumerator.name();
-            goto exit;
-        }
-    }
-    std::cout << "<unknown enumerator>";
+    if (auto enumerator = find_enumerator_by_value(enumeration, std::span(data_ptr, size)))
+        std::cout << enumerator->name();
+    else
+        std::cout << "<unknown enumerator>";
 
-exit:
     data_ptr += size;
 }
 
@@ -527,17 +492,11 @@ void Commander::present_abstract_reference(uint32_t storage, reflifc::Expression
     const auto mask = (1u << bits_count) - 1;
     const auto sort = storage & mask;
 
-    std::cout << "(";
-    for (auto enumerator : enumeration.enumerators())
-    {
-        const auto value = enumerator.value().as_literal().int_value();
-        if (value == sort)
-        {
-            std::cout << enumerator.name();
-            break;
-        }
-    }
-    std::cout << ", " << ((storage ^ mask) >> bits_count) << ")";
+    std::cout << "("
+              << find_enumerator_by_value(enumeration, sort)->name()
+              << ", "
+              << ((storage ^ mask) >> bits_count)
+              << ")";
 }
 
 static std::vector<std::string_view> split(std::string_view s)

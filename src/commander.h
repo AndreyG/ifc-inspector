@@ -1,9 +1,10 @@
 ﻿#pragma once
 
-#include "reflifc/Enumeration.h"
-#include "reflifc/Expression.h"
-#include "reflifc/Field.h"
 #include "reflifc/Module.h"
+
+#include "reflifc/decl/Enumeration.h"
+#include "reflifc/decl/Field.h"
+#include "reflifc/decl/Struct.h"
 
 struct PartitionDescription
 {
