@@ -5,6 +5,7 @@
 #include "reflifc/Literal.h"
 #include "reflifc/StringLiteral.h"
 #include "reflifc/Query.h"
+#include "reflifc/TemplateId.h"
 #include "reflifc/decl/Enumeration.h"
 #include "reflifc/decl/Enumerator.h"
 #include "reflifc/decl/TemplateDeclaration.h"
@@ -12,7 +13,6 @@
 #include "reflifc/decl/ScopeDeclaration.h"
 #include "reflifc/expr/Dyad.h"
 #include "reflifc/type/Array.h"
-#include "reflifc/type/Syntatic.h"
 
 #include <ifc/Type.h>
 
@@ -30,7 +30,7 @@ T const* get_value(std::unordered_map<std::string_view, T> const & map, std::str
     return &it->second;
 }
 
-static std::pair<std::string_view, PartitionDescription> create_partition_description(reflifc::Struct partition)
+static std::pair<std::string_view, PartitionDescription> create_partition_description(reflifc::ClassOrStruct partition)
 {
     std::string_view name;
     PartitionDescription descr;
@@ -61,7 +61,7 @@ static std::pair<std::string_view, PartitionDescription> create_partition_descri
 
 void Commander::fill_partitions(reflifc::Namespace ifc_namespace)
 {
-    for (auto strct : get_structs(ifc_namespace.scope()))
+    for (auto strct : get_classes_and_structs(ifc_namespace.scope()))
     {
         if (!strct.is_complete())
             continue;
@@ -155,7 +155,7 @@ size_t Commander::size_of(reflifc::Type type) const
         if (decl.is_enumeration())
             return size_of(decl.as_enumeration().underlying_type());
 
-        return size_of(decl.as_scope().as_struct());
+        return size_of(decl.as_scope().as_class_or_struct());
     }
 
     if (type.is_array())
@@ -164,8 +164,8 @@ size_t Commander::size_of(reflifc::Type type) const
         return size_of(array.element()) * extent_value(array);
     }
 
-    auto syntatic_type = type.as_syntatic();
-    assert(has_name(syntatic_type.primary(), "AbstractReference"));
+    auto syntatic_type = type.as_syntactic();
+    assert(has_name(syntatic_type.primary().as_template(), "AbstractReference"));
     return sizeof(std::uint32_t);
 }
 
@@ -196,7 +196,7 @@ size_t Commander::size_of(ifc::FundamentalType type) const
     }
 }
 
-size_t Commander::size_of(reflifc::Struct strct) const
+size_t Commander::size_of(reflifc::ClassOrStruct strct) const
 {
     size_t size = 0;
 
@@ -240,8 +240,8 @@ void Commander::present_type(reflifc::Type type)
     }
     else
     {
-        auto syntatic_type = type.as_syntatic();
-        assert(has_name(syntatic_type.primary(), "AbstractReference"));
+        auto syntatic_type = type.as_syntactic();
+        assert(has_name(syntatic_type.primary().as_template(), "AbstractReference"));
         auto arguments = syntatic_type.arguments();
         assert(arguments.size() == 2);
         std::string_view second_arg_name = arguments[1].as_type().designation().as_enumeration().name();
@@ -398,7 +398,7 @@ void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
         if (decl.is_enumeration())
             present_enumerator(data_ptr, decl.as_enumeration());
         else
-            present_object_value(data_ptr, decl.as_scope().as_struct());
+            present_object_value(data_ptr, decl.as_scope().as_class_or_struct());
     }
     else if (type.is_array())
     {
@@ -417,8 +417,8 @@ void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
     }
     else
     {
-        auto syntatic_type = type.as_syntatic();
-        assert(has_name(syntatic_type.primary(), "AbstractReference"));
+        auto syntatic_type = type.as_syntactic();
+        assert(has_name(syntatic_type.primary().as_template(), "AbstractReference"));
         auto arguments = syntatic_type.arguments();
         assert(arguments.size() == 2);
         present_abstract_reference(*reinterpret_cast<std::uint32_t const*>(data_ptr), arguments[0], arguments[1]);
@@ -426,7 +426,7 @@ void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
     }
 }
 
-void Commander::present_object_value(const std::byte*& data_ptr, reflifc::Struct strct)
+void Commander::present_object_value(const std::byte*& data_ptr, reflifc::ClassOrStruct strct)
 {
     std::cout << "{ ";
 
