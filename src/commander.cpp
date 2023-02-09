@@ -6,6 +6,7 @@
 #include "reflifc/StringLiteral.h"
 #include "reflifc/Query.h"
 #include "reflifc/TemplateId.h"
+#include "reflifc/TupleExpressionView.h"
 #include "reflifc/decl/Enumeration.h"
 #include "reflifc/decl/Enumerator.h"
 #include "reflifc/decl/TemplateDeclaration.h"
@@ -13,6 +14,7 @@
 #include "reflifc/decl/ScopeDeclaration.h"
 #include "reflifc/expr/Dyad.h"
 #include "reflifc/type/Array.h"
+#include "reflifc/type/Base.h"
 
 #include <ifc/Type.h>
 
@@ -36,7 +38,7 @@ static std::pair<std::string_view, PartitionDescription> create_partition_descri
     PartitionDescription descr;
 
     for (auto base : partition.bases())
-        std::ranges::copy(fields(base), std::back_inserter(descr.fields));
+        std::ranges::copy(fields(base.type.designation().as_class_or_struct()), std::back_inserter(descr.fields));
 
     for (auto member : partition.members())
     {
@@ -155,7 +157,7 @@ size_t Commander::size_of(reflifc::Type type) const
         if (decl.is_enumeration())
             return size_of(decl.as_enumeration().underlying_type());
 
-        return size_of(decl.as_scope().as_class_or_struct());
+        return size_of(decl.as_class_or_struct());
     }
 
     if (type.is_array())
@@ -398,7 +400,7 @@ void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
         if (decl.is_enumeration())
             present_enumerator(data_ptr, decl.as_enumeration());
         else
-            present_object_value(data_ptr, decl.as_scope().as_class_or_struct());
+            present_object_value(data_ptr, decl.as_class_or_struct());
     }
     else if (type.is_array())
     {
