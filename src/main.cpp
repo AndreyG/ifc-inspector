@@ -25,7 +25,7 @@ int main(int argc, char* argv[])
     ifc::File file(input_data->view());
 
     ifc::File schema(schema_raw_data());
-    Commander commander(reflifc::Module(schema), file);
+    Commander commander(reflifc::Module(&schema), file);
     for (;;)
     {
         std::string command;

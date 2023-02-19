@@ -6,7 +6,7 @@
 #include "reflifc/StringLiteral.h"
 #include "reflifc/Query.h"
 #include "reflifc/TemplateId.h"
-#include "reflifc/TupleExpressionView.h"
+#include "reflifc/TupleView.h"
 #include "reflifc/decl/Enumeration.h"
 #include "reflifc/decl/Enumerator.h"
 #include "reflifc/decl/TemplateDeclaration.h"
@@ -145,6 +145,11 @@ size_t Commander::calculate_size_of(PartitionDescription const& descr) const
     return align4(size);
 }
 
+static void assert_is_abstract_reference(reflifc::TemplateId template_id)
+{
+    assert(has_name(template_id.primary().referenced_decl().as_template(), "AbstractReference"));
+}
+
 size_t Commander::size_of(reflifc::Type type) const
 {
     if (type.is_fundamental())
@@ -166,8 +171,7 @@ size_t Commander::size_of(reflifc::Type type) const
         return size_of(array.element()) * extent_value(array);
     }
 
-    auto syntatic_type = type.as_syntactic();
-    assert(has_name(syntatic_type.primary().as_template(), "AbstractReference"));
+    assert_is_abstract_reference(type.as_syntactic());
     return sizeof(std::uint32_t);
 }
 
@@ -243,7 +247,7 @@ void Commander::present_type(reflifc::Type type)
     else
     {
         auto syntatic_type = type.as_syntactic();
-        assert(has_name(syntatic_type.primary().as_template(), "AbstractReference"));
+        assert_is_abstract_reference(syntatic_type);
         auto arguments = syntatic_type.arguments();
         assert(arguments.size() == 2);
         std::string_view second_arg_name = arguments[1].as_type().designation().as_enumeration().name();
@@ -420,7 +424,7 @@ void Commander::present_value(std::byte const*& data_ptr, reflifc::Type type)
     else
     {
         auto syntatic_type = type.as_syntactic();
-        assert(has_name(syntatic_type.primary().as_template(), "AbstractReference"));
+        assert_is_abstract_reference(syntatic_type);
         auto arguments = syntatic_type.arguments();
         assert(arguments.size() == 2);
         present_abstract_reference(*reinterpret_cast<std::uint32_t const*>(data_ptr), arguments[0], arguments[1]);

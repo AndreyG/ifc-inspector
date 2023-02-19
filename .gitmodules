@@ -1,6 +1,3 @@
 [submodule "lib/ifc"]
 	path = lib/ifc
 	url = git@github.com:AndreyG/ifc-reader.git
-[submodule "lib/reflifc"]
-	path = lib/reflifc
-	url = git@github.com:AndreyG/reflifc.git
