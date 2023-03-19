@@ -1,4 +1,4 @@
-﻿#include "commander.h"
+﻿module;
 
 #include "reflifc/Expression.h"
 #include "reflifc/Type.h"
@@ -20,6 +20,8 @@
 
 #include <charconv>
 #include <iostream>
+
+module commander;
 
 using namespace std::string_view_literals;
 

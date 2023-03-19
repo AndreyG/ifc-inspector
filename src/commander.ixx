@@ -1,4 +1,4 @@
-﻿#pragma once
+﻿module;
 
 #include "reflifc/Module.h"
 
@@ -6,12 +6,14 @@
 #include "reflifc/decl/Field.h"
 #include "reflifc/decl/ClassOrStruct.h"
 
+export module commander;
+
 struct PartitionDescription
 {
     std::vector<reflifc::Field> fields;
 };
 
-class Commander
+export class Commander
 {
     ifc::File const& file_;
     std::unordered_map<std::string_view, ifc::PartitionSummary const*> partition_summary_;

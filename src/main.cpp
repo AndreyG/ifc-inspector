@@ -1,4 +1,6 @@
-﻿#include "commander.h"
+﻿import commander;
+
+#include <reflifc/Module.h>
 
 #include <ifc/blob_reader.h>
 
