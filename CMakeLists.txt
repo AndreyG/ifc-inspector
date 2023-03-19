@@ -13,12 +13,16 @@ add_custom_command(
   COMMAND embedfile schema_raw_data "${CMAKE_BINARY_DIR}" ${schema_input_file}
   DEPENDS ${schema_input_file})
 
-set(sources
-    src/main.cpp
-    src/commander.h
-    src/commander.cpp
-    )
 
-add_executable(ifc-inspector ${sources} ${schema_output_file})
+add_executable(ifc-inspector)
+
+target_sources(ifc-inspector
+  PRIVATE
+    src/main.cpp
+    src/commander.cpp
+    ${schema_output_file}
+  PRIVATE FILE_SET HEADERS FILES
+    src/commander.h
+)
 
 target_link_libraries(ifc-inspector reflifc ifc-blob-reader)
